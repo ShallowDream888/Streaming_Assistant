@@ -9,6 +9,7 @@ from tkinter import ttk
 from scapy.all import sniff, Raw, conf
 import re
 
+
 # ---------------------------- 工具函数 ----------------------------
 
 def resource_path(relative_path):
@@ -18,8 +19,8 @@ def resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
 
 
-# 检查 WinPcap 是否已安装
 def check_winpcap_installed():
+    """检查 WinPcap 是否已安装"""
     possible_paths = [
         "C:\\Windows\\System32\\wpcap.dll",
         "C:\\Windows\\SysWOW64\\wpcap.dll"
@@ -27,14 +28,14 @@ def check_winpcap_installed():
     return any(os.path.exists(path) for path in possible_paths)
 
 
-# 从文件中读取 Base64 编码内容
 def get_base64_from_file(base64_file):
+    """从文件中读取 Base64 编码内容"""
     with open(base64_file, "rb") as f:
         return f.read()
 
 
-# 保存嵌入的安装程序到临时文件
 def save_winpcap_installer():
+    """保存嵌入的安装程序到临时文件"""
     base64_data = get_base64_from_file(resource_path("winpcap_base64.txt"))
     installer_path = os.path.join(tempfile.gettempdir(), "winpcap-4.13.exe")
     with open(installer_path, "wb") as installer_file:
@@ -42,8 +43,8 @@ def save_winpcap_installer():
     return installer_path
 
 
-# 安装 WinPcap
 def install_winpcap():
+    """安装 WinPcap"""
     winpcap_installer = save_winpcap_installer()
     try:
         subprocess.run([winpcap_installer, "/S"], check=True)
@@ -54,8 +55,8 @@ def install_winpcap():
             os.remove(winpcap_installer)
 
 
-# 获取所有网卡名称
 def get_all_interfaces():
+    """获取所有网卡名称"""
     try:
         return [iface.name for iface in conf.ifaces.values()]
     except Exception:
@@ -65,6 +66,7 @@ def get_all_interfaces():
 # ---------------------------- UI 相关函数 ----------------------------
 
 def ico_option():
+    """设置窗口图标"""
     try:
         icon_path = resource_path("tuiliu.ico")
         root.iconbitmap(icon_path)
@@ -73,21 +75,25 @@ def ico_option():
 
 
 def log_message(message, tag="info"):
+    """在输出框中显示消息"""
     output_text.config(state=tk.NORMAL)
     if tag == "error":
         output_text.insert(tk.END, f"{message}\n", ("red",))
         output_text.tag_config("red", foreground="red", font=("Consolas", 12, "bold"))
     else:
         output_text.insert(tk.END, f"{message}\n")
+    output_text.see(tk.END)  # 自动滚动到最新消息
     output_text.config(state=tk.DISABLED)
 
 
 def show_initialization_message():
-    log_message("首次打开该软件需要初始化！\n", "error")
+    """显示初始化完成消息"""
+    log_message("首次打开该软件需要初始化！", "error")
     log_message("初始化已完成，请手动重启该软件！", "error")
 
 
 def show_description():
+    """显示使用说明"""
     log_message("\n使用说明:")
     log_message("1. 首先打开该软件，再打开直播伴侣。")
     log_message("2. 点击直播伴侣中开始直播按钮。")
@@ -96,6 +102,7 @@ def show_description():
 
 
 def copy_to_clipboard(text, description):
+    """复制内容到剪贴板"""
     if not text:
         log_message(f"{description} 为空，无法复制！", "error")
         return
@@ -108,10 +115,12 @@ def copy_to_clipboard(text, description):
 # ---------------------------- 网络包捕获 ----------------------------
 
 class StopCaptureException(Exception):
+    """自定义异常用于停止捕获"""
     pass
 
 
 def process_packet(packet):
+    """处理捕获到的网络包"""
     global stop_capture, rtmp_url, key
 
     if packet.haslayer(Raw):
@@ -120,7 +129,7 @@ def process_packet(packet):
         if not hasattr(process_packet, 'rtmp_urls'):
             process_packet.rtmp_urls = set()
 
-        rtmp_match = re.search(r"rtmp://[\w\.-]+(/\w+)*", payload)
+        rtmp_match = re.search(r"rtmp://[\w.-]+(/\w+)*", payload)
         if rtmp_match:
             rtmp_url = rtmp_match.group(0)
             if rtmp_url not in process_packet.rtmp_urls:
@@ -135,16 +144,18 @@ def process_packet(packet):
 
 
 def capture_rtmp_on_iface(iface):
+    """捕获指定网卡上的RTMP流"""
     try:
         sniff(filter='tcp port 1935', iface=iface, prn=process_packet, store=False)
     # except StopCaptureException:
     #     log_message(f"捕获已完成，网卡 {iface} 停止捕获。")
     except Exception as e:
         return []
-    #     log_message(f"网卡 {iface} 捕获停止: {e}", "error")
+        # log_message(f"网卡 {iface} 捕获停止: {e}", "error")
 
 
 def start_capture():
+    """开始捕获RTMP流"""
     interfaces = get_all_interfaces()
     if not interfaces:
         log_message("无法获取网卡列表！", "error")
