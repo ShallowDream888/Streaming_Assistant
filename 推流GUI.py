@@ -106,6 +106,9 @@ def copy_to_clipboard(text, description):
     if not text:
         log_message(f"{description} 为空，无法复制！", "error")
         return
+    if "stream-" == text:
+        log_message(f"{description} 为空，无法复制！", "error")
+        return
     root.clipboard_clear()
     root.clipboard_append(text)
     root.update()
