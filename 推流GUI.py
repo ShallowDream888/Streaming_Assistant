@@ -1,8 +1,41 @@
+import os
+import sys
+import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk
 from scapy.all import sniff, Raw, conf
 import re
+
+# 检查 WinPcap 是否已安装
+def check_winpcap_installed():
+    # 常见的 WinPcap DLL 文件路径
+    possible_paths = [
+        "C:\\Windows\\System32\\wpcap.dll",
+        "C:\\Windows\\SysWOW64\\wpcap.dll"
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return True
+    return False
+
+# 安装 WinPcap
+def install_winpcap():
+    # WinPcap 安装包路径
+    winpcap_installer = "winpcap-4.13.exe"  # 请确保该文件存在于你的项目文件夹中
+    if os.path.exists(winpcap_installer):
+        try:
+            # 使用静默模式安装 WinPcap
+            subprocess.run([winpcap_installer, "/S"], check=True)
+        except subprocess.CalledProcessError as e:
+            output_text.config(state=tk.NORMAL)
+            output_text.insert(tk.END, f"WinPcap 安装失败: {e}\n")
+            output_text.config(state=tk.DISABLED)
+    else:
+        output_text.config(state=tk.NORMAL)
+        output_text.insert(tk.END, "未找到 WinPcap 安装包，请确保它位于项目目录中。\n")
+        output_text.config(state=tk.DISABLED)
 
 # 获取所有网卡名称
 def get_all_interfaces():
@@ -26,11 +59,16 @@ def show_description():
     output_text.insert(tk.END, "1. 首先打开该软件，再打开直播伴侣。\n")
     output_text.insert(tk.END, "2. 点击直播伴侣中开始直播按钮。\n")
     output_text.insert(tk.END, "3. 软件会显示地址和密钥，将它们复制到OBS中。\n")
-    output_text.insert(tk.END, "4. 关闭直播伴侣，再点击OBS中的开始直播按钮。如需弹幕功能，可再次打开直播伴侣。\n")
+    output_text.insert(tk.END, "4. 在obs中点击开始直播即可。\n")
     output_text.config(state=tk.DISABLED)
 
 # 复制内容到剪贴板
 def copy_to_clipboard(text, description):
+    if not text:
+        output_text.config(state=tk.NORMAL)
+        output_text.insert(tk.END, f"{description} 为空，无法复制！\n")
+        output_text.config(state=tk.DISABLED)
+        return
     root.clipboard_clear()
     root.clipboard_append(text)
     root.update()  # 更新剪贴板内容
@@ -43,12 +81,20 @@ def process_packet(packet):
     global stop_capture, rtmp_url, key
     if packet.haslayer(Raw):
         payload = packet[Raw].load.decode('utf-8', errors='ignore')
+
+        # 使用集合存储已捕获的 RTMP 地址，避免重复
+        if not hasattr(process_packet, 'rtmp_urls'):
+            process_packet.rtmp_urls = set()
+
         rtmp_match = re.search(r"rtmp://[\w\.-]+(/[\w\.-]*)*", payload)
         if rtmp_match:
             rtmp_url = rtmp_match.group(0)
-            output_text.config(state=tk.NORMAL)
-            output_text.insert(tk.END, f"地址: {rtmp_url}\n")
-            output_text.config(state=tk.DISABLED)
+            if rtmp_url not in process_packet.rtmp_urls:
+                process_packet.rtmp_urls.add(rtmp_url)
+                output_text.config(state=tk.NORMAL)
+                output_text.insert(tk.END, f"地址: {rtmp_url}\n")
+                output_text.config(state=tk.DISABLED)
+
         if 'stream-' in payload:
             key = payload.split('stream-')[1].split(' ')[0]
             output_text.config(state=tk.NORMAL)
@@ -61,10 +107,15 @@ def process_packet(packet):
 def capture_rtmp_on_iface(iface):
     try:
         sniff(filter='tcp port 1935', iface=iface, prn=process_packet, store=False)
-    except Exception as e:
+    except StopCaptureException:
         output_text.config(state=tk.NORMAL)
-        output_text.insert(tk.END, f"网卡 {iface} 捕获停止: {e}\n")
+        output_text.insert(tk.END, f"捕获已完成，网卡 {iface} 停止捕获。\n")
         output_text.config(state=tk.DISABLED)
+    except Exception as e:
+        return []
+        # output_text.config(state=tk.NORMAL)
+        # output_text.insert(tk.END, f"网卡 {iface} 捕获停止: {e}\n")
+        # output_text.config(state=tk.DISABLED)
 
 # 开始捕获
 def start_capture():
@@ -75,60 +126,84 @@ def start_capture():
         output_text.config(state=tk.DISABLED)
         return
 
+    output_text.config(state=tk.NORMAL)
+    output_text.insert(tk.END, "正在尝试捕获RTMP地址和密钥，请稍候...\n")
+    output_text.config(state=tk.DISABLED)
+
     for iface in interfaces:
         capture_thread = threading.Thread(target=capture_rtmp_on_iface, args=(iface,))
         capture_thread.daemon = True
         capture_thread.start()
 
+
 # 创建主窗口
 root = tk.Tk()
 root.title("推流地址捕获    Author: 浅梦")
-root.geometry("600x400")
+root.geometry("650x450")
 root.resizable(False, False)
 
 # 设置窗口图标
 try:
-    root.iconbitmap('icon.ico')  # 确保当前目录下有icon.ico文件
+    def resource_path(relative_path):
+        """获取资源文件路径"""
+        # 如果是 PyInstaller 打包的程序，资源会在 _MEIPASS 中
+        if hasattr(sys, '_MEIPASS'):
+            return os.path.join(sys._MEIPASS, relative_path)
+        # 否则使用脚本运行目录的资源路径
+        return os.path.join(os.path.abspath("."), relative_path)
+    # 动态加载图标
+    icon_path = resource_path("resources/icon.ico")
+    try:
+        root.iconbitmap(icon_path)
+    except Exception as e:
+        print(f"无法加载图标: {e}")
 except:
     pass
 
 # 设置主窗口背景颜色
-root.configure(bg="#f0f0f5")
+root.configure(bg="#f7f7fa")
 
 # 创建顶部标签
-header_label = tk.Label(root, text="推流地址捕获工具", font=("Arial", 16, "bold"), bg="#f0f0f5", fg="#333333")
-header_label.pack(pady=10)
+header_label = tk.Label(root, text="推流地址捕获工具", font=("Arial", 18, "bold"), bg="#f7f7fa", fg="#333333")
+header_label.pack(pady=15)
 
 # 创建文本框用于显示捕获结果
-output_text = tk.Text(root, height=12, width=70, state=tk.DISABLED, bg="#ffffff", fg="#333333", font=("Consolas", 10))
-output_text.pack(pady=10)
+output_frame = tk.Frame(root, bg="#f7f7fa")
+output_frame.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
+
+output_text = tk.Text(output_frame, height=15, width=80, state=tk.DISABLED, bg="#ffffff", fg="#333333", font=("Consolas", 10), wrap=tk.WORD)
+output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 # 创建滚动条
-scrollbar = ttk.Scrollbar(root, command=output_text.yview)
+scrollbar = ttk.Scrollbar(output_frame, command=output_text.yview)
 output_text.configure(yscrollcommand=scrollbar.set)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 # 创建按钮框架
-button_frame = tk.Frame(root, bg="#f0f0f5")
-button_frame.pack(pady=10)
+button_frame = tk.Frame(root, bg="#f7f7fa")
+button_frame.pack(pady=15)
 
 # 创建按钮
 style = ttk.Style()
-style.configure("TButton", font=("Arial", 10), padding=5)
+style.configure("TButton", font=("Consolas", 10), padding=5)
 
 description_button = ttk.Button(button_frame, text="使用说明", command=show_description)
-description_button.grid(row=0, column=0, padx=10)
+description_button.grid(row=0, column=0, padx=15, pady=5)
 
 copy_rtmp_button = ttk.Button(button_frame, text="复制地址", command=lambda: copy_to_clipboard(rtmp_url, "RTMP 地址"))
-copy_rtmp_button.grid(row=0, column=1, padx=10)
+copy_rtmp_button.grid(row=0, column=1, padx=15, pady=5)
 
 copy_key_button = ttk.Button(button_frame, text="复制密钥", command=lambda: copy_to_clipboard(f"stream-{key}", "密钥"))
-copy_key_button.grid(row=0, column=2, padx=10)
+copy_key_button.grid(row=0, column=2, padx=15, pady=5)
 
 # 在程序启动时显示提示信息
 output_text.config(state=tk.NORMAL)
-output_text.insert(tk.END, "请打开直播伴侣，获取的地址或密钥会自动显示在下方\n")
+output_text.insert(tk.END, "欢迎使用推流地址捕获工具！\n请打开直播伴侣，获取的地址或密钥会自动显示在下方。\n")
 output_text.config(state=tk.DISABLED)
+
+# 检查并安装 WinPcap
+if not check_winpcap_installed():
+    install_winpcap()
 
 # 自动开始捕获
 start_capture()
